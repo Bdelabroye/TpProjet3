@@ -7,6 +7,8 @@ const mysql = require('mysql');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
+var lat = 0.00;
+var long = 0.00;
 
 dotenv.config();
 
@@ -33,7 +35,7 @@ function authMiddleware(req, res, next) {
     const payload = jwt.verify(token, JWT_SECRET);
     if (isRevoked(payload.jti)) return res.status(401).json({ success: false, message: 'Token révoqué' });
     req.user = payload;
-    next();
+    next(); 
   } catch (err) {
     return res.status(401).json({ success: false, message: 'Token invalide ou expiré' });
   }
@@ -188,6 +190,50 @@ app.post('/api/auth/logout', (req, res) => {
   return res.status(200).json({ success: true, message: 'Déconnecté' });
 });
 
+// Route Arduino : Réception des trames GPS
+const ARDUINO_TOKEN = process.env.ARDUINO_TOKEN;
+
+app.post('/api/gps/update', (req, res) => {
+    // 1. Vérification de sécurité (Token)
+    const incomingToken = req.headers['x-arduino-token'] || req.body.token;
+
+    if (!incomingToken || incomingToken !== ARDUINO_TOKEN) {
+        console.warn("Tentative d'accès non autorisé sur la route GPS");
+        return res.status(403).json({ success: false, message: 'Accès refusé : Token Arduino invalide' });
+    }
+
+    // 2. Récupération des données
+    const { latitude, longitude } = req.body;
+
+    // Vérification que les données existent
+    if (latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ success: false, message: 'Coordonnées GPS manquantes' });
+    }
+
+    // 3. Mise à jour des variables globales (déclarées au début du fichier)
+    lat = parseFloat(latitude);
+    long = parseFloat(longitude);
+
+    console.log(`📍 Mise à jour GPS reçue : Lat=${lat}, Long=${long}`);
+
+    return res.json({ success: true, message: 'Coordonnées mises à jour avec succès' });
+});
+
+// Route pour récupérer la dernière position de l'utilisateur connecté
+app.get('/api/positions/last', authMiddleware, (req, res) => {
+    const userId = req.user.sub; // récupéré depuis le token
+
+    if (!userId) {
+        return res.status(400).json({ success: false, message: "Utilisateur non identifié" });
+    }
+
+    return res.json({
+            success: true,
+            lat: lat,
+            lng: long,
+            });
+          })
+  
 // Middleware global d'erreur
 app.use((err, req, res, next) => {
   console.error('Erreur serveur:', err);
