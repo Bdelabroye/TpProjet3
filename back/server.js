@@ -70,12 +70,6 @@ app.get('/', (req, res) => {
     res.sendFile(path.join('/var/www/html/TpProjet3/front', 'index.html'));
 });
 
-// Exemple de route map (à compléter selon besoin)
-app.get('/api/map', (req, res) => {
-  // Récupérer les données GPS depuis la BDD et renvoyer en JSON
-  res.json({ success: true, data: [] });
-});
-
 // Route de connexion
 app.post('/api/login', (req, res) => {
   const { login, password } = req.body;
@@ -194,53 +188,11 @@ app.post('/api/auth/logout', (req, res) => {
   return res.status(200).json({ success: true, message: 'Déconnecté' });
 });
 
-// Exemple de route protégée
-app.get('/api/protected', authMiddleware, (req, res) => {
-  res.json({ success: true, message: 'Accès autorisé', user: { id: req.user.sub, login: req.user.login } });
-});
-
 // Middleware global d'erreur
 app.use((err, req, res, next) => {
   console.error('Erreur serveur:', err);
   res.status(500).json({ success: false, message: 'Erreur serveur interne' });
 });
-
-// Route pour récupérer la dernière position de l'utilisateur connecté
-app.get('/api/positions/last', authMiddleware, (req, res) => {
-    const userId = req.user.sub; // récupéré depuis le token
-
-    if (!userId) {
-        return res.status(400).json({ success: false, message: "Utilisateur non identifié" });
-    }
-
-    const sql = `
-        SELECT latitude AS lat, longitude AS lng, Date as created_at
-        FROM GPS
-        ORDER BY Date DESC
-        LIMIT 1
-    `;
-
-    db.query(sql, [userId], (err, results) => {
-        if (err) {
-            console.error("Erreur MySQL :", err);
-            return res.status(500).json({ success: false, message: "Erreur serveur" });
-        }
-
-        if (results.length === 0) {
-            return res.status(404).json({ success: false, message: "Aucune position trouvée" });
-        }
-
-        const pos = results[0];
-
-        return res.json({
-            success: true,
-            lat: pos.lat,
-            lng: pos.lng,
-            timestamp: pos.created_at
-        });
-    });
-});
-
 
 // Démarrage du serveur
 app.listen(PORT, () => {
