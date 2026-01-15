@@ -41,6 +41,14 @@ function authMiddleware(req, res, next) {
   }
 }
 
+function xorDecrypt(data, key) { 
+const output = Buffer.alloc(data.length);
+for (let i = 0; i < data.length; i++) { 
+output[i] = data[i] ^ key.charCodeAt(i % key.length);
+} 
+return output;
+}
+
 // --- App et middlewares ---
 const app = express();
 
@@ -192,32 +200,67 @@ app.post('/api/auth/logout', (req, res) => {
 
 // Route Arduino : Réception des trames GPS
 const ARDUINO_TOKEN = process.env.ARDUINO_TOKEN;
+const ENCRYPT_KEY = process.env.ENCRYPT;
 
 app.post('/api/gps/update', (req, res) => {
-    // 1. Vérification de sécurité (Token)
-    const incomingToken = req.headers['x-arduino-token'] || req.body.token;
+    const { auth_key, data } = req.body;
 
-    if (!incomingToken || incomingToken !== ARDUINO_TOKEN) {
-        console.warn("Tentative d'accès non autorisé sur la route GPS");
-        return res.status(403).json({ success: false, message: 'Accès refusé : Token Arduino invalide' });
+    // 1. Vérification de la clé d'authentification
+    if (!auth_key || auth_key !== ARDUINO_TOKEN) {
+        console.warn("Accès refusé : clé d'authentification invalide");
+        return res.status(403).json({
+            success: false,
+            message: 'Accès refusé : clé invalide'
+        });
     }
 
-    // 2. Récupération des données
-    const { latitude, longitude } = req.body;
-
-    // Vérification que les données existent
-    if (latitude === undefined || longitude === undefined) {
-        return res.status(400).json({ success: false, message: 'Coordonnées GPS manquantes' });
+    // 2. Vérification du champ data
+    if (!data) {
+        return res.status(400).json({
+            success: false,
+            message: 'Champ data manquant'
+        });
     }
 
-    // 3. Mise à jour des variables globales (déclarées au début du fichier)
-    lat = parseFloat(latitude);
-    long = parseFloat(longitude);
+    try {
+        // 3. Décodage Base64
+        const encryptedBuffer = Buffer.from(data, 'base64');
 
-    console.log(`📍 Mise à jour GPS reçue : Lat=${lat}, Long=${long}`);
+        // 4. Déchiffrement XOR
+        const decryptedBuffer = xorDecrypt(encryptedBuffer, ENCRYPT_KEY);
+        const decryptedText = decryptedBuffer.toString('utf8');
 
-    return res.json({ success: true, message: 'Coordonnées mises à jour avec succès' });
+        // 5. Parsing du JSON
+        const parsed = JSON.parse(decryptedText);
+        const { latitude, longitude } = parsed;
+
+        if (latitude === undefined || longitude === undefined) {
+            return res.status(400).json({
+                success: false,
+                message: 'Coordonnées GPS manquantes dans le message déchiffré'
+            });
+        }
+
+        // 6. Mise à jour des variables globales
+        lat = parseFloat(latitude);
+        long = parseFloat(longitude);
+
+        console.log(`GPS reçu : Lat=${lat}, Long=${long}`);
+
+        return res.json({
+            success: true,
+            message: 'Coordonnées mises à jour avec succès'
+        });
+
+    } catch (err) {
+        console.error("Erreur de déchiffrement ou parsing:", err.message);
+        return res.status(500).json({
+            success: false,
+            message: 'Erreur de traitement des données'
+        });
+    }
 });
+
 
 // Route pour récupérer la dernière position de l'utilisateur connecté
 app.get('/api/positions/last', authMiddleware, (req, res) => {
