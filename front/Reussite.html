@@ -1,161 +1,73 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
-    <meta charset='utf-8'>
-    <meta http-equiv='X-UA-Compatible' content='IE=edge'>
-    <title>Connexion réussie</title>
-    <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <title>Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-
-    <link rel='stylesheet' type='text/css' media='screen' href='/front/style.css'>
-
-    <style>
-        #map {
-            height: 400px;
-            width: 100%;
-            margin-top: 20px;
-        }
-    </style>
+  <link rel="stylesheet" href="/front/reussite.css" />
 </head>
+
 <body>
-    <h1>Connexion réussie</h1>
-    <p>Bienvenue ! Vous êtes maintenant connecté.</p>
-    <button id="logout">Déconnexion</button>
+  <div class="bg"></div>
 
-    <!-- Conteneur de la carte -->
-    <div id="map"></div>
+  <main class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">✓</div>
+        <div class="brand-text">
+          <div class="title">Connexion OK</div>
+          <div class="subtitle" id="subtitle">Vérification du token...</div>
+        </div>
+      </div>
 
-    <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+      <div class="actions">
+        <a class="btn ghost" href="/front/index.html" id="backHome">Accueil</a>
+        <button class="btn danger" id="logout">Déconnexion</button>
+      </div>
+    </header>
 
-    <script>
-    // Initialisation de la carte (centre par défaut)
-    const map = L.map('map').setView([46.5, 2.5], 6);
+    <section class="grid">
+      <div class="card">
+        <h2>État</h2>
+        <div class="status-line">
+          <span class="dot" id="dot"></span>
+          <span id="statusText">En cours…</span>
+        </div>
 
-    // Chargement des tuiles OpenStreetMap
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '© OpenStreetMap'
-    }).addTo(map);
+        <div class="info">
+          <div class="row">
+            <span class="k">Session</span>
+            <span class="v" id="sessionText">—</span>
+          </div>
+          <div class="row">
+            <span class="k">Dernière vérif</span>
+            <span class="v" id="lastCheck">—</span>
+          </div>
+        </div>
+      </div>
 
-    // Récupération du token
-    const token = localStorage.getItem("token");
+      <div class="card">
+        <h2>Prochaine étape</h2>
+        <p class="muted">
+          GPS supprimé. La suite, c’est le module RFID : onglet Live + onglet Enregistrement.
+        </p>
 
-    // Variables pour gérer le marqueur et l'intervalle
-    let lastMarker = null;
-    let updateIntervalId = null;
-    let isFetching = false;
-    let firstCenter = true; // true => on centre la carte la première fois seulement
+        <div class="cta">
+          <button class="btn" id="goRfid" disabled>Aller sur RFID (bientôt)</button>
+          <small class="hint">Le bouton sera actif quand la page RFID existera.</small>
+        </div>
+      </div>
+    </section>
 
-    // Fonction pour récupérer la dernière position depuis le back
-    async function loadLastPosition() {
-        if (!token) {
-            // pas de token : redirection vers la page de login
-            window.location.replace('/front/index.html');
-            return;
-        }
+    <footer class="foot">
+      <span>© Projet BTS — Dashboard</span>
+      <span class="sep">•</span>
+      <span id="timeNow">—</span>
+    </footer>
+  </main>
 
-        if (isFetching) return; // évite les requêtes concurrentes
-        isFetching = true;
-
-        try {
-            const res = await fetch('/api/positions/last', {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Accept': 'application/json'
-                }
-            });
-
-            if (res.status === 401) {
-                // token invalide ou expiré : nettoyer et rediriger
-                localStorage.removeItem('token');
-                stopAutoRefresh();
-                window.location.replace('/front/index.html');
-                return;
-            }
-
-            const data = await res.json();
-
-            if (!data.success) {
-                console.warn("Aucune position trouvée :", data.message);
-                isFetching = false;
-                return;
-            }
-
-            const a = Number(data.lat);
-            const b = Number(data.lng);
-            const c = Date(data.timestamp);
-
-            if (Number.isNaN(a) || Number.isNaN(b)) {
-                console.warn('Coordonnées invalides reçues du serveur', data);
-                isFetching = false;
-                return;
-            }
-
-            // Met à jour ou crée le marqueur
-            if (lastMarker) {
-                lastMarker.setLatLng([a, b]);
-                lastMarker.setPopupContent(`Latitude : ${a}<br>Longitude : ${b}<br>${c}`);
-            } else {
-                lastMarker = L.marker([a, b]).addTo(map)
-                    .bindPopup(`Latitude : ${a}<br>Longitude : ${b}<br>${c}`);
-            }
-
-            // Ouvre le popup
-            lastMarker.openPopup();
-
-            // Centre la carte la première fois seulement, ensuite on préserve le zoom
-            if (firstCenter) {
-                // centre et fixe un zoom initial (13)
-                map.setView([a, b], 13);
-                firstCenter = false;
-            } else {
-                // conserve le zoom actuel et recentre en douceur (panTo)
-                // panTo ne change pas le niveau de zoom
-                map.panTo([a, b], { animate: true, duration: 0.5 });
-            }
-
-        } catch (err) {
-            console.error("Erreur lors de la récupération de la position :", err);
-        } finally {
-            isFetching = false;
-        }
-    }
-
-    // Démarre l'intervalle pour appeler loadLastPosition toutes les secondes
-    function startAutoRefresh(intervalMs = 1000) {
-        // Appel initial immédiat
-        loadLastPosition();
-
-        // Puis répétition toutes les secondes
-        updateIntervalId = setInterval(() => {
-            loadLastPosition();
-        }, intervalMs);
-    }
-
-    // Arrête l'intervalle
-    function stopAutoRefresh() {
-        if (updateIntervalId) {
-            clearInterval(updateIntervalId);
-            updateIntervalId = null;
-        }
-    }
-
-    // Lancer l'auto refresh
-    startAutoRefresh(1000);
-
-    // Gestion du bouton logout : stoppe l'intervalle et redirige
-    document.getElementById("logout").addEventListener("click", function() {
-        stopAutoRefresh();
-        localStorage.removeItem("token");
-        window.location.href = '/front/index.html';
-    });
-    </script>
-
-    <script src='/front/map.js'></script>
-
+  <script src="/front/reussite.js"></script>
 </body>
 </html>

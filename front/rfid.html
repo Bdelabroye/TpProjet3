@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>RFID - Gestion Porte</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/front/rfid.css" />
+</head>
+
+<body>
+  <div class="bg"></div>
+
+  <main class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">RF</div>
+        <div class="brand-text">
+          <div class="title">Gestion Porte RFID</div>
+          <div class="subtitle" id="subtitle">Connexion…</div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <a class="btn ghost" href="/front/Reussite.html">Retour</a>
+        <button class="btn danger" id="logout">Déconnexion</button>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="live">Live</button>
+      <button class="tab" data-tab="enroll">Enregistrement</button>
+      <button class="tab" data-tab="users">Cartes</button>
+    </nav>
+
+    <!-- LIVE -->
+    <section class="panel show" id="tab-live">
+      <div class="grid">
+        <div class="card">
+          <h2>Dernier badge</h2>
+          <div class="status-line">
+            <span class="dot" id="dot"></span>
+            <span id="statusText">En attente…</span>
+          </div>
+
+          <div class="info">
+            <div class="row">
+              <span class="k">Nom</span>
+              <span class="v" id="liveName">—</span>
+            </div>
+            <div class="row">
+              <span class="k">UID</span>
+              <span class="v mono" id="liveUid">—</span>
+            </div>
+            <div class="row">
+              <span class="k">Porte</span>
+              <span class="v" id="liveDoor">—</span>
+            </div>
+            <div class="row">
+              <span class="k">Heure</span>
+              <span class="v" id="liveAt">—</span>
+            </div>
+          </div>
+
+          <div class="cta">
+            <button class="btn" id="refreshLogs">Rafraîchir logs</button>
+            <small class="hint">Le live temps réel arrivera quand on ajoute le TCP/SSE.</small>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Historique</h2>
+          <div class="table-wrap">
+            <table class="table" id="logsTable">
+              <thead>
+                <tr>
+                  <th>Heure</th>
+                  <th>Nom</th>
+                  <th>UID</th>
+                  <th>Porte</th>
+                  <th>OK</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="5" class="muted">Chargement…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ENROLL -->
+    <section class="panel" id="tab-enroll">
+      <div class="card">
+        <h2>Enregistrer une carte</h2>
+
+        <div class="form">
+          <label>
+            <span>Nom</span>
+            <input type="text" id="fullName" placeholder="Ex: Jean Dupont" maxlength="120" />
+          </label>
+
+          <label>
+            <span>UID</span>
+            <input type="text" id="uid" class="mono" placeholder="Ex: 04A1B2C3D4" maxlength="64" />
+          </label>
+
+          <label class="check">
+            <input type="checkbox" id="enabled" checked />
+            <span>Carte active</span>
+          </label>
+
+          <div class="form-actions">
+            <button class="btn" id="btnEnroll">Enregistrer</button>
+            <button class="btn ghost" id="btnClear">Vider</button>
+          </div>
+
+          <div class="toast" id="toast" hidden></div>
+        </div>
+
+        <p class="muted" style="margin-top:10px">
+          Note : l’UID vient du PC lecteur (D-Logic).
+        </p>
+      </div>
+    </section>
+
+    <!-- USERS -->
+    <section class="panel" id="tab-users">
+      <div class="card">
+        <h2>Cartes enregistrées</h2>
+        <div class="cta">
+          <button class="btn" id="refreshUsers">Rafraîchir</button>
+          <small class="hint">Si tu n’es pas admin, le back peut refuser (403). Normal.</small>
+        </div>
+
+        <div class="table-wrap" style="margin-top:10px">
+          <table class="table" id="usersTable">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Nom</th>
+                <th>UID</th>
+                <th>Actif</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="5" class="muted">Chargement…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <span id="who">—</span>
+      <span class="sep">•</span>
+      <span id="timeNow">—</span>
+    </footer>
+  </main>
+
+  <script src="/front/rfid.js"></script>
+</body>
+</html>

@@ -7,13 +7,13 @@ const mysql = require('mysql');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-var lat = 0.00;
-var long = 0.00;
+const net = require('net');
 
 dotenv.config();
 
 const JWT_SECRET = process.env.CODE;
 const PORT = process.env.PORT;
+const AUTH_KEY = process.env.ARDUINO_TOKEN
 // --- Utilitaires pour les tokens ---
 function extractToken(req) {
   const authHeader = req.headers.authorization || '';
@@ -39,14 +39,6 @@ function authMiddleware(req, res, next) {
   } catch (err) {
     return res.status(401).json({ success: false, message: 'Token invalide ou expiré' });
   }
-}
-
-function xorDecrypt(data, key) { 
-const output = Buffer.alloc(data.length);
-for (let i = 0; i < data.length; i++) { 
-output[i] = data[i] ^ key.charCodeAt(i % key.length);
-} 
-return output;
 }
 
 // --- App et middlewares ---
@@ -202,81 +194,272 @@ app.post('/api/auth/logout', (req, res) => {
 const ARDUINO_TOKEN = process.env.ARDUINO_TOKEN;
 const ENCRYPT_KEY = process.env.ENCRYPT;
 
-app.post('/api/gps/update', (req, res) => {
-    const { auth_key, data } = req.body;
+function isAdmin(userId, cb) {
+  db.query(
+    'SELECT Admin FROM User WHERE id = ? OR Id = ? OR ID = ? LIMIT 1',
+    [userId, userId, userId],
+    (err, rows) => {
+      if (err) return cb(err, false);
+      if (!rows || rows.length === 0) return cb(null, false);
+      return cb(null, !!rows[0].Admin);
+    }
+  );
+}
 
-    // 1. Vérification de la clé d'authentification
-    if (!auth_key || auth_key !== ARDUINO_TOKEN) {
-        console.warn("Accès refusé : clé d'authentification invalide");
-        return res.status(403).json({
-            success: false,
-            message: 'Accès refusé : clé invalide'
-        });
+app.get('/api/rfid/logs', authMiddleware, (req, res) => {
+  const limitRaw = parseInt(req.query.limit || '30', 10);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 30;
+
+  db.query(
+    'SELECT id, uid, person_name, door, allowed, created_at FROM rfid_logs ORDER BY id DESC LIMIT ?',
+    [limit],
+    (err, rows) => {
+      if (err) {
+        console.error('RFID logs error:', err);
+        return res.status(500).json({ success: false, message: 'Erreur DB logs' });
+      }
+      return res.json({ success: true, rows: rows || [] });
+    }
+  );
+});
+
+app.post('/api/rfid/enroll', authMiddleware, (req, res) => {
+  const userId = req.user?.sub;
+
+  const full_name = String(req.body?.full_name || '').trim();
+  const uid = String(req.body?.uid || '').trim();
+  const enabled = req.body?.enabled ? 1 : 0;
+
+  if (!full_name || !uid) {
+    return res.status(400).json({ success: false, message: 'full_name et uid requis' });
+  }
+
+  isAdmin(userId, (err, ok) => {
+    if (err) return res.status(500).json({ success: false, message: 'Erreur serveur' });
+    if (!ok) return res.status(403).json({ success: false, message: 'Admin requis' });
+
+    db.query(
+      'INSERT INTO rfid_people (full_name, uid, enabled) VALUES (?, ?, ?)',
+      [full_name, uid, enabled],
+      (err2) => {
+        if (err2) {
+          const msg = String(err2.message || '');
+          if (msg.includes('Duplicate') || msg.includes('duplicate') || msg.includes('UNIQUE')) {
+            return res.status(409).json({ success: false, message: 'UID déjà enregistré' });
+          }
+          console.error('RFID enroll error:', err2);
+          return res.status(500).json({ success: false, message: 'Erreur DB enroll' });
+        }
+        return res.json({ success: true, message: 'Carte enregistrée' });
+      }
+    );
+  });
+});
+
+app.get('/api/rfid/users', authMiddleware, (req, res) => {
+  const userId = req.user?.sub;
+
+  isAdmin(userId, (err, ok) => {
+    if (err) return res.status(500).json({ success: false, message: 'Erreur serveur' });
+    if (!ok) return res.status(403).json({ success: false, message: 'Admin requis' });
+
+    db.query(
+      'SELECT id, full_name, uid, enabled, created_at FROM rfid_people ORDER BY id DESC',
+      (err2, rows) => {
+        if (err2) {
+          console.error('RFID users error:', err2);
+          return res.status(500).json({ success: false, message: 'Erreur DB users' });
+        }
+        return res.json({ success: true, rows: rows || [] });
+      }
+    );
+  });
+});
+
+app.delete('/api/rfid/users/:id', authMiddleware, (req, res) => {
+  const userId = req.user?.sub;
+  const id = parseInt(req.params.id, 10);
+
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ success: false, message: 'ID invalide' });
+  }
+
+  isAdmin(userId, (err, ok) => {
+    if (err) return res.status(500).json({ success: false, message: 'Erreur serveur' });
+    if (!ok) return res.status(403).json({ success: false, message: 'Admin requis' });
+
+    db.query('DELETE FROM rfid_people WHERE id = ?', [id], (err2, result) => {
+      if (err2) {
+        console.error('RFID delete error:', err2);
+        return res.status(500).json({ success: false, message: 'Erreur DB delete' });
+      }
+      if (!result || result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: 'Carte introuvable' });
+      }
+
+      return res.json({ success: true, message: 'Supprimé' });
+    });
+  });
+});
+
+const TCP_BIND = process.env.TCP_BIND || '0.0.0.0';
+const TCP_PORT = parseInt(process.env.TCP_PORT || '56180', 10);
+const RFID_SHARED_KEY = process.env.RFID_SHARED_KEY || null;
+
+function parseBadgeLine(line) {
+  // Ex: BADGE;UID=04A1B2C3D4;DOOR=MAIN;KEY=MONSECRET
+  const parts = line.trim().split(';');
+  const msg = {};
+  if (parts[0] && !parts[0].includes('=')) msg.TYPE = parts[0].trim().toUpperCase();
+
+  for (const p of parts) {
+    const i = p.indexOf('=');
+    if (i === -1) continue;
+    const k = p.slice(0, i).trim().toUpperCase();
+    const v = p.slice(i + 1).trim();
+    msg[k] = v;
+  }
+  return msg;
+}
+
+const tcpServer = net.createServer((socket) => {
+  socket.setEncoding('utf8');
+  let buffer = '';
+
+  socket.on('data', (chunk) => {
+    buffer += chunk;
+
+    let idx;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 1);
+
+      if (!line) continue;
+
+      const msg = parseBadgeLine(line);
+      if (msg.TYPE && msg.TYPE !== 'BADGE') continue;
+
+      const uid = msg.UID;
+      const door = msg.DOOR || 'MAIN';
+      const key = msg.KEY || null;
+
+      if (!uid) continue;
+
+      // Sécurité minimale
+      if (RFID_SHARED_KEY && key !== RFID_SHARED_KEY) {
+        db.query(
+          'INSERT INTO rfid_logs (uid, person_name, door, allowed, raw_msg) VALUES (?, NULL, ?, 0, ?)',
+          [uid, door, line],
+          () => {}
+        );
+        try { socket.write(`RESULT;UID=${uid};ALLOWED=0;REASON=BAD_KEY\n`); } catch {}
+        continue;
+      }
+
+      // Cherche la personne
+      db.query('SELECT full_name, enabled FROM rfid_people WHERE uid = ? LIMIT 1', [uid], (err, rows) => {
+        const found = !err && rows && rows.length > 0;
+        const enabled = found ? !!rows[0].enabled : false;
+        const name = found ? rows[0].full_name : null;
+        const allowed = found && enabled;
+
+        db.query(
+          'INSERT INTO rfid_logs (uid, person_name, door, allowed, raw_msg) VALUES (?, ?, ?, ?, ?)',
+          [uid, name, door, allowed ? 1 : 0, line],
+          () => {}
+        );
+
+        try { socket.write(`RESULT;UID=${uid};ALLOWED=${allowed ? 1 : 0}\n`); } catch {}
+      });
+    }
+  });
+
+  socket.on('error', () => {});
+});
+
+tcpServer.listen(TCP_PORT, TCP_BIND, () => {
+  console.log(`[RFID] TCP listening on ${TCP_BIND}:${TCP_PORT}`);
+});
+
+// -----------------------------------------------------------
+// Route HTTP pour recevoir les UID envoyés par le programme C++
+// -----------------------------------------------------------
+app.post('/api/rfid/update', (req, res) => {
+  try {
+    const authKey = req.body?.auth_key;
+    const encryptedBase64 = req.body?.data;
+
+    if (!authKey || !encryptedBase64) {
+      return res.status(400).json({ success: false, message: "auth_key et data requis" });
     }
 
-    // 2. Vérification du champ data
-    if (!data) {
-        return res.status(400).json({
-            success: false,
-            message: 'Champ data manquant'
-        });
+    // Vérification clé d'authentification
+    if (authKey !== AUTH_KEY) {
+      return res.status(403).json({ success: false, message: "Clé d'authentification invalide" });
     }
 
+    // Décodage Base64
+    const encrypted = Buffer.from(encryptedBase64, "base64");
+
+    // Déchiffrement XOR
+    const key = Buffer.from(ENCRYPT_KEY);
+    const decrypted = Buffer.alloc(encrypted.length);
+
+    for (let i = 0; i < encrypted.length; i++) {
+      decrypted[i] = encrypted[i] ^ key[i % key.length];
+    }
+
+    const jsonStr = decrypted.toString("utf8");
+    console.log("[RFID] JSON déchiffré :", jsonStr);
+
+    let payload;
     try {
-        // 3. Décodage Base64
-        const encryptedBuffer = Buffer.from(data, 'base64');
+      payload = JSON.parse(jsonStr);
+    } catch (e) {
+      return res.status(400).json({ success: false, message: "JSON déchiffré invalide" });
+    }
 
-        // 4. Déchiffrement XOR
-        const decryptedBuffer = xorDecrypt(encryptedBuffer, ENCRYPT_KEY);
-        const decryptedText = decryptedBuffer.toString('utf8');
+    const uid = String(payload.uid || "").trim();
+    if (!uid) {
+      return res.status(400).json({ success: false, message: "UID manquant" });
+    }
 
-        // 5. Parsing du JSON
-        const parsed = JSON.parse(decryptedText);
-        const { latitude, longitude } = parsed;
-
-        if (latitude === undefined || longitude === undefined) {
-            return res.status(400).json({
-                success: false,
-                message: 'Coordonnées GPS manquantes dans le message déchiffré'
-            });
+    // Recherche dans la base
+    db.query(
+      "SELECT full_name, enabled FROM rfid_people WHERE uid = ? LIMIT 1",
+      [uid],
+      (err, rows) => {
+        if (err) {
+          console.error("Erreur DB RFID:", err);
+          return res.status(500).json({ success: false, message: "Erreur DB" });
         }
 
-        // 6. Mise à jour des variables globales
-        lat = parseFloat(latitude);
-        long = parseFloat(longitude);
+        const found = rows.length > 0;
+        const enabled = found ? !!rows[0].enabled : false;
+        const name = found ? rows[0].full_name : null;
+        const allowed = found && enabled;
 
-        console.log(`GPS reçu : Lat=${lat}, Long=${long}`);
+        // Log
+        db.query(
+          "INSERT INTO rfid_logs (uid, person_name, door, allowed, raw_msg) VALUES (?, ?, ?, ?, ?)",
+          [uid, name, "HTTP", allowed ? 1 : 0, jsonStr]
+        );
 
         return res.json({
-            success: true,
-            message: 'Coordonnées mises à jour avec succès'
+          success: true,
+          uid,
+          allowed,
+          person: name || null
         });
-
-    } catch (err) {
-        console.error("Erreur de déchiffrement ou parsing:", err.message);
-        return res.status(500).json({
-            success: false,
-            message: 'Erreur de traitement des données'
-        });
-    }
+      }
+    );
+  } catch (err) {
+    console.error("Erreur /api/rfid/update:", err);
+    return res.status(500).json({ success: false, message: "Erreur serveur interne" });
+  }
 });
 
 
-// Route pour récupérer la dernière position de l'utilisateur connecté
-app.get('/api/positions/last', authMiddleware, (req, res) => {
-    const userId = req.user.sub; // récupéré depuis le token
-
-    if (!userId) {
-        return res.status(400).json({ success: false, message: "Utilisateur non identifié" });
-    }
-
-    return res.json({
-            success: true,
-            lat: lat,
-            lng: long,
-            });
-          })
-  
 // Middleware global d'erreur
 app.use((err, req, res, next) => {
   console.error('Erreur serveur:', err);
